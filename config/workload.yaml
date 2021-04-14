@@ -1,0 +1,23 @@
+apiVersion: experimental.kontinue.io/v1
+kind: Workload
+metadata:
+  name: spring-petclinic
+  labels:
+    app.kubernetes.io/name: spring-petclinic
+    app.tanzu.vmware.com/workload-type: web
+spec:
+  git:
+    # update when code is pushed to a new location
+    url: https://github.com/scothis/spring-petclinic.git
+    ref:
+      branch: main
+  env:
+  - name: SPRING_PROFILES_ACTIVE
+    value: mysql
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 500m
