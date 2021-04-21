@@ -25,7 +25,7 @@ file_sync_only("harbor-repo.vmware.com/kontinuedemo/spring-petclinic",
     ],
 )
 
-k8s_kind('WorkloadConfiguration', image_json_path='{.items[0].value.spec.containers[0].image}')
+k8s_kind('Workload', pod_readiness='ignore')
 
 k8s_resource(workload='spring-petclinic', port_forwards=8080,
              resource_deps=['spring-petclinic-compile'],
