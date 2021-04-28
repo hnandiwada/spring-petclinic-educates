@@ -1,20 +1,27 @@
 load('ext://local_output', 'local_output')
 # -*- mode: Python -*-
 # live reload
-def tanzu_develop(workload='', manifests=[], deps=["."], resource_deps=[], live_update=[]):
-    k8s_kind('Workload', api_version='experimental.kontinue.io/v1',
-            image_json_path='{.metadata.dev_image}')
-    k8s_resource(workload, port_forwards=8080,
-                resource_deps=resource_deps, 
-                extra_pod_selectors=[{'serving.knative.dev/service': workload}])
-    workload_yaml = local_output('kubectl get workloads ' + workload + ' -o yaml')
-    image_ref = local_output('kubectl get workloaddecorators ' + workload +'-workload-template -o jsonpath=\'{.status.template.spec.containers[?(@.name=="workload")].image}\'')
-    image_ref = image_ref.split("@sha256", 1)[0]
-    # add image to workload_yaml
-    workload_yaml = workload_yaml.replace("metadata:", "metadata:\n  dev_image: " + image_ref, 1)
-    print(workload_yaml)
-    manifests.append(blob(workload_yaml))
-    file_sync_only(image_ref, manifests, deps, live_update)
+def tanzu_develop(k8s_object, deps=["."], resource_deps=[], live_update=[]):
+    # 1. Grab a resource that as close to a Pod as possible from the cluster; in-lieu of specifying this in our codebase
+    
+    ksvc_yaml =  local_output('kubectl get ksvc ' + k8s_object + ' -o yaml')
+    ksvc_image_json_path = '{.spec.template.spec.containers[0].image}'
+    ksvc_image = local_output('kubectl get ksvc ' + k8s_object + ' -o jsonpath=\'' + ksvc_image_json_path + '\'')
+    ksvc_image = ksvc_image.replace('@sha256', '') # 3rd party `file_sync_only` wants image-name:actualsha not image-name@sha246:actualsha
+
+    # 2. Tell Tilt about it, so Tilt knows which container to update
+    k8s_kind('Service', api_version='serving.knative.dev/v1',
+            image_json_path=ksvc_image_json_path)
+    k8s_resource(k8s_object, port_forwards=8080,
+                resource_deps=resource_deps,
+                extra_pod_selectors=[{'serving.knative.dev/service' : k8s_object}])
+  
+    # 3. Wire-up Tilt's live updates to the pod
+    file_sync_only(image=ksvc_image,
+                   manifests=[blob(ksvc_yaml)],
+                   deps=deps,
+                   live_update=live_update)
+ 
 # module function
 # non build development with only file sync
 def file_sync_only(image='', manifests=[], deps=["."], live_update=[]):
@@ -26,6 +33,7 @@ def file_sync_only(image='', manifests=[], deps=["."], live_update=[]):
     deployed_image, deployed_tag = _get_current_tag(image, manifests)
     # ":" is null command
     custom_build(deployed_image, ':',
+        # TODO: specify hotreloading capable entrypoint that comes from Tiltfile
         tag=deployed_tag,
         deps=deps,
         skips_local_docker=True,
@@ -62,3 +70,4 @@ def _get_sync_params(sync):
     local_path = output[1].replace(os.getcwd() + "/", "")
     remote_path = output[3]
     return local_path, remote_path
+
