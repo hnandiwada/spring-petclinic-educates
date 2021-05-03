@@ -2,23 +2,66 @@ load('ext://local_output', 'local_output')
 # -*- mode: Python -*-
 # live reload
 def tanzu_develop(k8s_object, deps=["."], resource_deps=[], live_update=[]):
-    # 1. Grab a resource that as close to a Pod as possible from the cluster; in-lieu of specifying this in our codebase
+
+    # 1. Create a CRD that we can create instances that act as Tilt's image target
+    twp_crd = """
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tiltworkloadproxys.experimental.desktop.io
+spec:
+  group: experimental.desktop.io
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                image:
+                  type: string
+  scope: Namespaced
+  names:
+    plural: tiltworkloadproxys
+    singular: tiltworkloadproxy
+    kind: TiltWorkloadProxy
+    shortNames:
+    - twp
+"""
+    local("cat << EOF | kubectl apply -f - " + twp_crd + "EOF")
     
-    ksvc_yaml =  local_output('kubectl get ksvc ' + k8s_object + ' -o yaml')
+    # 2. Tell Tilt about it, so Tilt knows which container to update
+    k8s_kind('TiltWorkloadProxy', api_version='experimental.desktop.io/v1',
+            image_json_path="{.spec.image}")
+
+    # 3. Fetch the image from the cluster
     ksvc_image_json_path = '{.spec.template.spec.containers[0].image}'
     ksvc_image = local_output('kubectl get ksvc ' + k8s_object + ' -o jsonpath=\'' + ksvc_image_json_path + '\'')
     ksvc_image = ksvc_image.replace('@sha256', '') # 3rd party `file_sync_only` wants image-name:actualsha not image-name@sha246:actualsha
 
-    # 2. Tell Tilt about it, so Tilt knows which container to update
-    k8s_kind('Service', api_version='serving.knative.dev/v1',
-            image_json_path=ksvc_image_json_path)
-    k8s_resource(k8s_object, port_forwards=8080,
+    # 4. Create an instance of the tilt workload proxy to represent the app
+    twp_template = """
+apiVersion: "experimental.desktop.io/v1"
+kind: TiltWorkloadProxy
+metadata:
+  name: {k8s_object}-twp
+spec:
+  image: {image}    
+"""
+    twp = twp_template.format(k8s_object=k8s_object, image=ksvc_image)
+    local("cat << EOF | kubectl apply -f - " + twp + "EOF")
+
+    k8s_resource(k8s_object+'-twp', port_forwards=8080,
                 resource_deps=resource_deps,
                 extra_pod_selectors=[{'serving.knative.dev/service' : k8s_object}])
-  
-    # 3. Wire-up Tilt's live updates to the pod
+
+    # 5. Wire-up Tilt's live updates to the pod
     file_sync_only(image=ksvc_image,
-                   manifests=[blob(ksvc_yaml)],
+                   manifests=[blob(twp)],
                    deps=deps,
                    live_update=live_update)
  
